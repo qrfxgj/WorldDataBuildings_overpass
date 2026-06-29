@@ -5,6 +5,7 @@ const ENDPOINTS = [
   'https://overpass.kumi.systems/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.openstreetmap.ru/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
 ];
 
 app.get('/buildings', async (req, res) => {
