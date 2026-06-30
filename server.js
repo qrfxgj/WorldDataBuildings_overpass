@@ -3,39 +3,49 @@ const express = require('express');
 const app = express();
 
 const ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
 ];
 
 async function queryOverpass(minLat, minLon, maxLat, maxLon) {
-  // Ogranicz maksymalny obszar zapytania
   const query = `[out:json][timeout:20];way["building"](${minLat},${minLon},${maxLat},${maxLon});out center;`;
 
   for (const endpoint of ENDPOINTS) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 22000);
-
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         body: 'data=' + encodeURIComponent(query),
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'Mozilla/5.0 OverpassProxy/1.0',
+          'User-Agent': 'Mozilla/5.0 (compatible; BuildingProxy/1.0)',
+          'Accept': 'application/json',
+          'Accept-Language': 'en-US,en;q=0.9',
         },
-        signal: controller.signal
+        timeout: 22000,
       });
 
       const text = await response.text();
-      console.log(`[${endpoint}] status: ${response.status}, poczatek: ${text.slice(0, 80)}`);
+      console.log(`[${endpoint}] status: ${response.status}, start: ${text.slice(0, 60)}`);
 
-      if (!response.ok) continue;
+      if (!response.ok) {
+        console.warn(`${endpoint} zwrocil ${response.status}`);
+        continue;
+      }
+
+      if (text.trim().startsWith('<')) {
+        console.warn(`${endpoint} zwrocil HTML - pomijam`);
+        continue;
+      }
 
       let data;
-      try { data = JSON.parse(text); } catch(e) { continue; }
+      try { data = JSON.parse(text); } catch(e) {
+        console.warn(`JSON parse error: ${e.message}`);
+        continue;
+      }
 
-      return (data.elements || [])
+      const buildings = (data.elements || [])
         .filter(el => el.type === 'way' && el.center)
         .map(el => ({
           lat: el.center.lat,
@@ -45,13 +55,13 @@ async function queryOverpass(minLat, minLon, maxLat, maxLon) {
             : 20
         }));
 
+      console.log(`OK: ${buildings.length} budynkow z ${endpoint}`);
+      return buildings;
+
     } catch(e) {
-      console.warn(`Blad dla ${endpoint}:`, e.message);
-    } finally {
-      clearTimeout(timeout);
+      console.warn(`Blad ${endpoint}: ${e.message}`);
     }
   }
-
   return null;
 }
 
@@ -66,11 +76,9 @@ app.get('/buildings', async (req, res) => {
   const lon0 = parseFloat(minLon);
   const lat1 = parseFloat(maxLat);
   const lon1 = parseFloat(maxLon);
-
   const latMid = (lat0 + lat1) / 2;
   const lonMid = (lon0 + lon1) / 2;
 
-  // Podziel chunk na 4 ćwiartki - mniejsze zapytania = szybciej
   const quarters = [
     [lat0, lon0, latMid, lonMid],
     [lat0, lonMid, latMid, lon1],
@@ -79,12 +87,10 @@ app.get('/buildings', async (req, res) => {
   ];
 
   try {
-    // Odpytaj wszystkie 4 ćwiartki równolegle
     const results = await Promise.all(
       quarters.map(([a, b, c, d]) => queryOverpass(a, b, c, d))
     );
 
-    // Połącz wyniki i usuń duplikaty po współrzędnych
     const seen = new Set();
     const buildings = [];
 
@@ -108,7 +114,6 @@ app.get('/buildings', async (req, res) => {
   }
 });
 
-// Keep-alive
 setInterval(async () => {
   try {
     await fetch('https://worlddatabuildings-overpass.onrender.com/buildings?minLat=52.2&minLon=21.0&maxLat=52.3&maxLon=21.1');
